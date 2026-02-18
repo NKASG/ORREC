@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Orange AI Recruitment</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+body {
+    margin: 0;
+    font-family: 'Segoe UI', sans-serif;
+    display: flex;
+    height: 100vh;
+    background: #ffffff;
+}
+
+/* Sidebar */
+.sidebar {
+    width: 220px;
+    background: #ff6a00;
+    color: white;
+    padding: 20px;
+}
+
+.sidebar h2 {
+    margin-top: 0;
+}
+
+/* Main */
+.main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.header {
+    padding: 15px;
+    border-bottom: 1px solid #eee;
+    font-weight: bold;
+    font-size: 18px;
+}
+
+#chat-container {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+    background: #f9fafb;
+}
+
+.message {
+    max-width: 70%;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    border-radius: 12px;
+    line-height: 1.5;
+    font-size: 14px;
+}
+
+.user {
+    background: #ff6a00;
+    color: white;
+    margin-left: auto;
+}
+
+.bot {
+    background: #ffffff;
+    border: 1px solid #ddd;
+}
+
+.input-area {
+    display: flex;
+    padding: 15px;
+    border-top: 1px solid #eee;
+}
+
+input {
+    flex: 1;
+    padding: 12px;
+    border-radius: 20px;
+    border: 1px solid #ccc;
+}
+
+button {
+    margin-left: 10px;
+    padding: 12px 18px;
+    background: #ff6a00;
+    color: white;
+    border: none;
+    border-radius: 20px;
+    cursor: pointer;
+}
+
+.typing {
+    font-style: italic;
+    color: gray;
+    font-size: 13px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="sidebar">
+    <h2>🟧 Orange AI</h2>
+    <p>Recruitment Assistant</p>
+</div>
+
+<div class="main">
+
+    <div class="header">Chat</div>
+
+    <div id="chat-container"></div>
+
+    <div class="input-area">
+        <input id="question" placeholder="Ask about recruitment policies..." 
+        onkeypress="if(event.key==='Enter') sendMessage()" />
+        <button onclick="sendMessage()">Send</button>
+    </div>
+
+</div>
+
+<script>
+
+const chatContainer = document.getElementById("chat-container");
+
+function saveChat() {
+    localStorage.setItem("chatHistory", chatContainer.innerHTML);
+}
+
+function loadChat() {
+    const saved = localStorage.getItem("chatHistory");
+    if (saved) chatContainer.innerHTML = saved;
+}
+
+function addMessage(text, sender) {
+    const div = document.createElement("div");
+    div.className = "message " + sender;
+    div.innerText = text;
+    chatContainer.appendChild(div);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+    saveChat();
+}
+
+function showTyping() {
+    const typing = document.createElement("div");
+    typing.className = "typing";
+    typing.id = "typing";
+    typing.innerText = "Assistant is typing...";
+    chatContainer.appendChild(typing);
+}
+
+function removeTyping() {
+    const typing = document.getElementById("typing");
+    if (typing) typing.remove();
+}
+
+async function sendMessage() {
+    const input = document.getElementById("question");
+    const question = input.value.trim();
+    if (!question) return;
+
+    addMessage(question, "user");
+    input.value = "";
+
+    showTyping();
+
+    const response = await fetch("/query", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({question})
+    });
+
+    const data = await response.json();
+
+    removeTyping();
+    addMessage(data.answer, "bot");
+}
+
+window.onload = function() {
+    loadChat();
+    if (!localStorage.getItem("chatHistory")) {
+        addMessage("Hello 👋 I am Orange Group’s Recruitment Assistant. How may I assist you today?", "bot");
+    }
+};
+
+</script>
+
+</body>
+</html>
