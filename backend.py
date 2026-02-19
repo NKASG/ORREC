@@ -13,7 +13,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_groq import ChatGroq
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -25,14 +25,11 @@ from usage_tracker import track_usage
 # ======================================================
 load_dotenv()
 
-# ======================================================
-# LOGGING
-# ======================================================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("OrangeRecruitment")
 
 # ======================================================
-# RECRUITMENT RAG SYSTEM
+# MAIN RAG SYSTEM
 # ======================================================
 class RecruitmentRAG:
 
@@ -40,23 +37,19 @@ class RecruitmentRAG:
         self.data_dir = data_dir
         self.groq_api_key = os.getenv("GROQ_API_KEY1")
 
-        logger.info("Loading embedding model...")
         self.embed_model = SentenceTransformer("all-MiniLM-L6-v2")
 
-        logger.info("Initializing vector store...")
         self.chroma_client = chromadb.PersistentClient(path="./data/vector_store")
         self.collection = self.chroma_client.get_or_create_collection(
             name="recruitment_docs"
         )
 
-        logger.info("Loading LLM...")
         self.llm = ChatGroq(
             groq_api_key=self.groq_api_key,
             model_name="llama-3.1-8b-instant",
             temperature=0.5
         )
 
-        # Always re-ingest on startup
         self.ingest_data()
 
     # ======================================================
@@ -65,9 +58,17 @@ class RecruitmentRAG:
     def load_memory(self):
         try:
             with open("memory_store.json", "r") as f:
-                return json.load(f)
+                data = json.load(f)
+
+                if "corrections" not in data:
+                    data["corrections"] = []
+
+                if "current_roles" not in data:
+                    data["current_roles"] = []
+
+                return data
         except:
-            return {"corrections": []}
+            return {"corrections": [], "current_roles": []}
 
     def save_memory(self, data):
         with open("memory_store.json", "w") as f:
@@ -75,14 +76,11 @@ class RecruitmentRAG:
 
     def store_correction(self, question, correct_answer):
         memory = self.load_memory()
-
         memory["corrections"].append({
             "question": question.lower(),
             "answer": correct_answer
         })
-
         self.save_memory(memory)
-        logger.info("Correction stored successfully.")
 
     def check_memory(self, question):
         memory = self.load_memory()
@@ -94,25 +92,69 @@ class RecruitmentRAG:
 
         return None
 
+    def get_current_roles_response(self):
+        memory = self.load_memory()
+        roles = memory.get("current_roles", [])
+
+        if not roles:
+            return {
+                "answer": "There are currently no active recruitment roles available. Please check back later.",
+                "sources": []
+            }
+
+        response_text = "We are currently recruiting for the following roles:\n\n"
+
+        for role in roles:
+            response_text += f"- {role['title']} ({role['department']}, {role['location']})\n"
+            response_text += f"  {role['description']}\n\n"
+
+        return {
+            "answer": response_text.strip(),
+            "sources": ["Live Recruitment Roles"]
+        }
+
+    # ======================================================
+    # SEMANTIC DOMAIN FILTER
+    # ======================================================
+    def is_recruitment_related(self, question: str) -> bool:
+
+        recruitment_profile = """
+        Orange Group recruitment policies, interview process,
+        candidate shortlisting, eligibility criteria,
+        contract staff requirements, management trainee programme,
+        sales and marketing bootcamp, secondary tests,
+        staffing policies, employment conditions,
+        non-attendance rules, recruitment scoring and thresholds.
+        """
+
+        question_vec = self.embed_model.encode(
+            [question],
+            normalize_embeddings=True
+        )[0]
+
+        profile_vec = self.embed_model.encode(
+            [recruitment_profile],
+            normalize_embeddings=True
+        )[0]
+
+        similarity = float(question_vec @ profile_vec)
+        logger.info(f"Domain similarity score: {similarity}")
+
+        return similarity >= 0.38
+
     # ======================================================
     # INGEST PDFs
     # ======================================================
     def ingest_data(self):
-
-        # Clear existing vectors
         try:
             self.collection.delete(where={})
-            logger.info("Cleared existing vector store.")
         except:
             pass
 
         pdf_files = list(Path(self.data_dir).glob("*.pdf"))
-        logger.info(f"Found {len(pdf_files)} PDF files.")
-
         documents = []
 
         for pdf in pdf_files:
-            logger.info(f"Ingesting {pdf.name}")
             loader = PyPDFLoader(str(pdf))
             loaded_docs = loader.load()
 
@@ -143,8 +185,6 @@ class RecruitmentRAG:
             metadatas=metadatas,
             ids=ids
         )
-
-        logger.info("All PDFs ingested successfully.")
 
     # ======================================================
     # HYBRID SEARCH
@@ -182,7 +222,6 @@ class RecruitmentRAG:
             hybrid_rank.append((final_score, i))
 
         hybrid_rank.sort(reverse=True)
-
         best_indices = [i for _, i in hybrid_rank[:5]]
 
         context = "\n\n".join(documents[i] for i in best_indices)
@@ -191,14 +230,52 @@ class RecruitmentRAG:
         return context, sources
 
     # ======================================================
-    # QUERY
+    # MAIN QUERY
     # ======================================================
     def query(self, question: str) -> Dict[str, Any]:
 
         if not question.strip():
             return {"answer": "Please enter a valid question.", "sources": []}
 
-        # 1️⃣ Check memory first
+        q_lower = question.lower().strip()
+
+        # 1️⃣ Greetings
+        greetings = ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]
+
+        if q_lower in greetings:
+            return {
+                "answer": "Hello 👋 I am Orange Group’s Recruitment Assistant. How may I assist you today?",
+                "sources": []
+            }
+
+        if "how are you" in q_lower:
+            return {
+                "answer": "I'm functioning optimally and ready to assist you with Orange Group recruitment inquiries 😊",
+                "sources": []
+            }
+
+        # 2️⃣ Current roles
+        role_keywords = [
+            "available roles",
+            "current roles",
+            "open positions",
+            "vacancies",
+            "job openings",
+            "are you recruiting",
+            "what roles are available"
+        ]
+
+        if any(keyword in q_lower for keyword in role_keywords):
+            return self.get_current_roles_response()
+
+        # 3️⃣ Domain restriction
+        if not self.is_recruitment_related(question):
+            return {
+                "answer": "I only answer questions that are Orange Group recruitment related.",
+                "sources": []
+            }
+
+        # 4️⃣ Memory correction
         memory_answer = self.check_memory(question)
         if memory_answer:
             return {
@@ -206,22 +283,19 @@ class RecruitmentRAG:
                 "sources": ["Learned Correction"]
             }
 
-        # 2️⃣ Detect correction phrases
+        # 5️⃣ Detect correction
         correction_phrases = ["that is wrong", "correction:", "the correct answer is"]
 
-        lower_q = question.lower()
-
         for phrase in correction_phrases:
-            if phrase in lower_q:
+            if phrase in q_lower:
                 correct_answer = question.split(phrase)[-1].strip()
                 self.store_correction(question, correct_answer)
-
                 return {
                     "answer": "✅ Thank you. I’ve learned this correction and will use it next time.",
                     "sources": []
                 }
 
-        # 3️⃣ Hybrid Search
+        # 6️⃣ Hybrid search
         context, sources = self.hybrid_search(question)
 
         if not context.strip():
@@ -230,14 +304,13 @@ class RecruitmentRAG:
                 "sources": []
             }
 
+        # 7️⃣ Conversational Prompt
         prompt = f"""
 You are Orange Group’s Official Recruitment Assistant.
 
-STRICT RULES:
-- Answer ONLY from the provided context.
-- Do NOT invent information.
-- If not found, respond EXACTLY with:
-"For further assistance, please contact recruitment@orangegroups.com"
+Provide a clear, professional, conversational response.
+Do not mention section numbers or document headings.
+Rewrite naturally as if explaining to a staff member.
 
 CONTEXT:
 {context}
@@ -251,16 +324,13 @@ FINAL ANSWER:
         response_obj = self.llm.invoke(prompt)
         response = response_obj.content.strip()
 
-        # ==============================
-        # Usage Tracking
-        # ==============================
+        # 8️⃣ Usage Tracking
         try:
             prompt_tokens = len(prompt.split())
             completion_tokens = len(response.split())
             tokens_used = prompt_tokens + completion_tokens
 
-            cost_per_million = 0.05
-            cost = (tokens_used / 1_000_000) * cost_per_million
+            cost = (tokens_used / 1_000_000) * 0.05
 
             track_usage(
                 prompt=question,
@@ -268,8 +338,8 @@ FINAL ANSWER:
                 tokens_used=tokens_used,
                 cost=round(cost, 6)
             )
-        except Exception as e:
-            logger.warning(f"Usage tracking failed: {e}")
+        except:
+            pass
 
         return {
             "answer": response,

@@ -1,3 +1,11 @@
 {
-    "corrections": []
+    "corrections": [],
+    "current_roles": [
+        {
+            "title": "Sales Executive",
+            "department": "Sales and Marketing",
+            "location": "Lagos",
+            "description": "Responsible for driving revenue and managing client relationships."
+        }
+    ]
 }
