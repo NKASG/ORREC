@@ -2,9 +2,9 @@ import os
 import uuid
 import logging
 import re
+import json
 from pathlib import Path
-from typing import Dict, Any, List
-from usage_tracker import track_usage
+from typing import Dict, Any
 
 import chromadb
 from sentence_transformers import SentenceTransformer
@@ -18,19 +18,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from usage_tracker import track_usage
+
 # ======================================================
 # LOAD ENV
 # ======================================================
 load_dotenv()
-
-# ======================================================
-# SIMPLE ANALYTICS STORAGE
-# ======================================================
-analytics_data = {
-    "total_queries": 0,
-    "questions": []
-}
-
 
 # ======================================================
 # LOGGING
@@ -39,35 +32,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("OrangeRecruitment")
 
 # ======================================================
-# BASIC SMALL TALK HANDLER
-# ======================================================
-def handle_small_talk(question: str):
-    q = question.lower().strip()
-
-    greetings = ["hi", "hello", "hey", "good morning", "good afternoon"]
-    if any(greet in q for greet in greetings):
-        return {
-            "answer": "Hello 👋 I am Orange Group’s Recruitment Assistant. How can I assist you today?",
-            "sources": []
-        }
-
-    if "how are you" in q:
-        return {
-            "answer": "I'm functioning optimally and ready to assist with recruitment inquiries 😊",
-            "sources": []
-        }
-
-    if "thank you" in q:
-        return {
-            "answer": "You're welcome! If you need further assistance, I’m here to help.",
-            "sources": []
-        }
-
-    return None
-
-
-# ======================================================
-# RECRUITMENT RAG CLASS
+# RECRUITMENT RAG SYSTEM
 # ======================================================
 class RecruitmentRAG:
 
@@ -91,21 +56,69 @@ class RecruitmentRAG:
             temperature=0.5
         )
 
-        if self.collection.count() == 0:
-            self.ingest_data()
+        # Always re-ingest on startup
+        self.ingest_data()
 
     # ======================================================
-    # INGEST
+    # MEMORY SYSTEM
+    # ======================================================
+    def load_memory(self):
+        try:
+            with open("memory_store.json", "r") as f:
+                return json.load(f)
+        except:
+            return {"corrections": []}
+
+    def save_memory(self, data):
+        with open("memory_store.json", "w") as f:
+            json.dump(data, f, indent=4)
+
+    def store_correction(self, question, correct_answer):
+        memory = self.load_memory()
+
+        memory["corrections"].append({
+            "question": question.lower(),
+            "answer": correct_answer
+        })
+
+        self.save_memory(memory)
+        logger.info("Correction stored successfully.")
+
+    def check_memory(self, question):
+        memory = self.load_memory()
+        q_lower = question.lower()
+
+        for item in memory["corrections"]:
+            if item["question"] in q_lower:
+                return item["answer"]
+
+        return None
+
+    # ======================================================
+    # INGEST PDFs
     # ======================================================
     def ingest_data(self):
+
+        # Clear existing vectors
+        try:
+            self.collection.delete(where={})
+            logger.info("Cleared existing vector store.")
+        except:
+            pass
+
         pdf_files = list(Path(self.data_dir).glob("*.pdf"))
+        logger.info(f"Found {len(pdf_files)} PDF files.")
+
         documents = []
 
         for pdf in pdf_files:
+            logger.info(f"Ingesting {pdf.name}")
             loader = PyPDFLoader(str(pdf))
             loaded_docs = loader.load()
+
             for doc in loaded_docs:
                 doc.metadata["source"] = pdf.name
+
             documents.extend(loaded_docs)
 
         splitter = RecursiveCharacterTextSplitter(
@@ -131,12 +144,12 @@ class RecruitmentRAG:
             ids=ids
         )
 
-        logger.info("Hybrid-ready ingestion complete.")
+        logger.info("All PDFs ingested successfully.")
 
     # ======================================================
     # HYBRID SEARCH
     # ======================================================
-    def hybrid_search(self, question: str, top_k=5):
+    def hybrid_search(self, question, top_k=5):
 
         query_vector = self.embed_model.encode(
             [question],
@@ -170,7 +183,7 @@ class RecruitmentRAG:
 
         hybrid_rank.sort(reverse=True)
 
-        best_indices = [i for _, i in hybrid_rank[:3]]
+        best_indices = [i for _, i in hybrid_rank[:5]]
 
         context = "\n\n".join(documents[i] for i in best_indices)
         sources = list(set(metadatas[i]["source"] for i in best_indices))
@@ -182,11 +195,33 @@ class RecruitmentRAG:
     # ======================================================
     def query(self, question: str) -> Dict[str, Any]:
 
-        # Small talk first
-        small_talk_response = handle_small_talk(question)
-        if small_talk_response:
-            return small_talk_response
+        if not question.strip():
+            return {"answer": "Please enter a valid question.", "sources": []}
 
+        # 1️⃣ Check memory first
+        memory_answer = self.check_memory(question)
+        if memory_answer:
+            return {
+                "answer": memory_answer,
+                "sources": ["Learned Correction"]
+            }
+
+        # 2️⃣ Detect correction phrases
+        correction_phrases = ["that is wrong", "correction:", "the correct answer is"]
+
+        lower_q = question.lower()
+
+        for phrase in correction_phrases:
+            if phrase in lower_q:
+                correct_answer = question.split(phrase)[-1].strip()
+                self.store_correction(question, correct_answer)
+
+                return {
+                    "answer": "✅ Thank you. I’ve learned this correction and will use it next time.",
+                    "sources": []
+                }
+
+        # 3️⃣ Hybrid Search
         context, sources = self.hybrid_search(question)
 
         if not context.strip():
@@ -201,7 +236,6 @@ You are Orange Group’s Official Recruitment Assistant.
 STRICT RULES:
 - Answer ONLY from the provided context.
 - Do NOT invent information.
-- Do NOT reveal confidential policies.
 - If not found, respond EXACTLY with:
 "For further assistance, please contact recruitment@orangegroups.com"
 
@@ -213,33 +247,34 @@ QUESTION:
 
 FINAL ANSWER:
 """
-        # ---- Call LLM ----
+
         response_obj = self.llm.invoke(prompt)
         response = response_obj.content.strip()
 
-        # ---- Estimate tokens (rough estimate using word count) ----
-        prompt_tokens = len(prompt.split())
-        completion_tokens = len(response.split())
-        tokens_used = prompt_tokens + completion_tokens
+        # ==============================
+        # Usage Tracking
+        # ==============================
+        try:
+            prompt_tokens = len(prompt.split())
+            completion_tokens = len(response.split())
+            tokens_used = prompt_tokens + completion_tokens
 
-        # ---- Rough cost calculation ----
-        # Adjust if your Groq pricing changes
-        cost_per_million = 0.05
-        cost = (tokens_used / 1_000_000) * cost_per_million
+            cost_per_million = 0.05
+            cost = (tokens_used / 1_000_000) * cost_per_million
 
-        # ---- Send usage tracking ----
-        track_usage(
-            prompt=question,
-            engine="llama-3.1-8b-instant",
-            tokens_used=tokens_used,
-            cost=round(cost, 6)
-        )
+            track_usage(
+                prompt=question,
+                engine="llama-3.1-8b-instant",
+                tokens_used=tokens_used,
+                cost=round(cost, 6)
+            )
+        except Exception as e:
+            logger.warning(f"Usage tracking failed: {e}")
 
         return {
             "answer": response,
             "sources": sources
         }
-
 
 
 # ======================================================
@@ -260,24 +295,10 @@ bot = RecruitmentRAG()
 class QueryRequest(BaseModel):
     question: str
 
-
 @app.get("/")
 def serve_ui():
     return FileResponse("frontend.html")
 
-
 @app.post("/query")
 def query_api(request: QueryRequest):
-    answer_data = bot.query(request.question)
-
-    # Store analytics
-    analytics_data["total_queries"] += 1
-    analytics_data["questions"].append(request.question)
-
-    return answer_data
-
-
-@app.get("/admin/analytics")
-def get_analytics():
-    return analytics_data
-
+    return bot.query(request.question)

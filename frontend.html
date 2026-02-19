@@ -19,13 +19,16 @@ body {
     background: #ff6a00;
     color: white;
     padding: 20px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
 }
 
 .sidebar h2 {
     margin-top: 0;
 }
 
-/* Main */
+/* Main Area */
 .main {
     flex: 1;
     display: flex;
@@ -37,6 +40,7 @@ body {
     border-bottom: 1px solid #eee;
     font-weight: bold;
     font-size: 18px;
+    background: #ffffff;
 }
 
 #chat-container {
@@ -46,13 +50,15 @@ body {
     background: #f9fafb;
 }
 
+/* Messages */
 .message {
     max-width: 70%;
     padding: 12px 16px;
     margin-bottom: 12px;
-    border-radius: 12px;
+    border-radius: 14px;
     line-height: 1.5;
     font-size: 14px;
+    animation: fadeIn 0.2s ease-in-out;
 }
 
 .user {
@@ -64,12 +70,15 @@ body {
 .bot {
     background: #ffffff;
     border: 1px solid #ddd;
+    color: #333;
 }
 
+/* Input Area */
 .input-area {
     display: flex;
     padding: 15px;
     border-top: 1px solid #eee;
+    background: white;
 }
 
 input {
@@ -77,6 +86,11 @@ input {
     padding: 12px;
     border-radius: 20px;
     border: 1px solid #ccc;
+    outline: none;
+}
+
+input:focus {
+    border-color: #ff6a00;
 }
 
 button {
@@ -87,12 +101,33 @@ button {
     border: none;
     border-radius: 20px;
     cursor: pointer;
+    font-weight: bold;
+}
+
+button:hover {
+    background: #e65c00;
 }
 
 .typing {
     font-style: italic;
     color: gray;
     font-size: 13px;
+    margin-bottom: 10px;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Scrollbar styling */
+#chat-container::-webkit-scrollbar {
+    width: 6px;
+}
+
+#chat-container::-webkit-scrollbar-thumb {
+    background: #ff6a00;
+    border-radius: 10px;
 }
 </style>
 </head>
@@ -111,8 +146,9 @@ button {
     <div id="chat-container"></div>
 
     <div class="input-area">
-        <input id="question" placeholder="Ask about recruitment policies..." 
-        onkeypress="if(event.key==='Enter') sendMessage()" />
+        <input id="question" 
+               placeholder="Ask about recruitment policies, interviews, eligibility..."
+               onkeypress="if(event.key==='Enter') sendMessage()" />
         <button onclick="sendMessage()">Send</button>
     </div>
 
@@ -122,22 +158,12 @@ button {
 
 const chatContainer = document.getElementById("chat-container");
 
-function saveChat() {
-    localStorage.setItem("chatHistory", chatContainer.innerHTML);
-}
-
-function loadChat() {
-    const saved = localStorage.getItem("chatHistory");
-    if (saved) chatContainer.innerHTML = saved;
-}
-
 function addMessage(text, sender) {
     const div = document.createElement("div");
     div.className = "message " + sender;
     div.innerText = text;
     chatContainer.appendChild(div);
     chatContainer.scrollTop = chatContainer.scrollHeight;
-    saveChat();
 }
 
 function showTyping() {
@@ -146,6 +172,7 @@ function showTyping() {
     typing.id = "typing";
     typing.innerText = "Assistant is typing...";
     chatContainer.appendChild(typing);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
 }
 
 function removeTyping() {
@@ -163,23 +190,30 @@ async function sendMessage() {
 
     showTyping();
 
-    const response = await fetch("/query", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({question})
-    });
+    try {
+        const response = await fetch("/query", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({question})
+        });
 
-    const data = await response.json();
+        const data = await response.json();
 
-    removeTyping();
-    addMessage(data.answer, "bot");
+        removeTyping();
+        addMessage(data.answer, "bot");
+
+    } catch (error) {
+        removeTyping();
+        addMessage("System temporarily unavailable. Please try again.", "bot");
+    }
 }
 
 window.onload = function() {
-    loadChat();
-    if (!localStorage.getItem("chatHistory")) {
-        addMessage("Hello 👋 I am Orange Group’s Recruitment Assistant. How may I assist you today?", "bot");
-    }
+    chatContainer.innerHTML = "";
+    addMessage(
+        "Hello 👋 I am Orange Group’s Recruitment Assistant. How may I assist you today?",
+        "bot"
+    );
 };
 
 </script>
