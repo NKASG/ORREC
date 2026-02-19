@@ -1,4 +1,3 @@
-User: write a read.me for my code
 
 Workspace: Collecting workspace information# ORREC — Orange Recruitment
 
