@@ -1,9 +1,9 @@
 .env
 venv/
 __pycache__/
-data/
 notebook/
 .ipynb_checkpoints/
 *.pyc
 typesense.ipynb
 pdf_loader.ipynb
+document.ipynb
