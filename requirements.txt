@@ -1,4 +1,7 @@
 langchain  
+fastapi
+uvicorn
+requests
 langchain-core
 langchain-community
 pypdf

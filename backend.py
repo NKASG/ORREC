@@ -21,33 +21,31 @@ from pydantic import BaseModel
 from usage_tracker import track_usage
 
 # ======================================================
-# LOAD ENV
+# ENV & LOGGING
 # ======================================================
 load_dotenv()
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("OrangeRecruitment")
 
 # ======================================================
-# MAIN RAG SYSTEM
+# MAIN SYSTEM
 # ======================================================
 class RecruitmentRAG:
 
     def __init__(self, data_dir="./data"):
         self.data_dir = data_dir
-        self.groq_api_key = os.getenv("GROQ_API_KEY1")
 
         self.embed_model = SentenceTransformer("all-MiniLM-L6-v2")
 
-        self.chroma_client = chromadb.PersistentClient(path="./data/vector_store")
+        self.chroma_client = chromadb.PersistentClient(path="/var/data/vector_store")
         self.collection = self.chroma_client.get_or_create_collection(
             name="recruitment_docs"
         )
 
         self.llm = ChatGroq(
-            groq_api_key=self.groq_api_key,
+            groq_api_key=os.getenv("GROQ_API_KEY1"),
             model_name="llama-3.1-8b-instant",
-            temperature=0.5
+            temperature=0.0
         )
 
         self.ingest_data()
@@ -59,13 +57,8 @@ class RecruitmentRAG:
         try:
             with open("memory_store.json", "r") as f:
                 data = json.load(f)
-
-                if "corrections" not in data:
-                    data["corrections"] = []
-
-                if "current_roles" not in data:
-                    data["current_roles"] = []
-
+                data.setdefault("corrections", [])
+                data.setdefault("current_roles", [])
                 return data
         except:
             return {"corrections": [], "current_roles": []}
@@ -77,19 +70,18 @@ class RecruitmentRAG:
     def store_correction(self, question, correct_answer):
         memory = self.load_memory()
         memory["corrections"].append({
-            "question": question.lower(),
-            "answer": correct_answer
+            "question": question.lower().strip(),
+            "answer": correct_answer.strip()
         })
         self.save_memory(memory)
 
     def check_memory(self, question):
         memory = self.load_memory()
-        q_lower = question.lower()
+        q = question.lower()
 
         for item in memory["corrections"]:
-            if item["question"] in q_lower:
+            if item["question"] in q:
                 return item["answer"]
-
         return None
 
     def get_current_roles_response(self):
@@ -102,45 +94,16 @@ class RecruitmentRAG:
                 "sources": []
             }
 
-        response_text = "We are currently recruiting for the following roles:\n\n"
+        response = "We are currently recruiting for the following roles:\n\n"
 
         for role in roles:
-            response_text += f"- {role['title']} ({role['department']}, {role['location']})\n"
-            response_text += f"  {role['description']}\n\n"
+            response += f"- {role['title']} ({role['department']}, {role['location']})\n"
+            response += f"  {role['description']}\n\n"
 
         return {
-            "answer": response_text.strip(),
+            "answer": response.strip(),
             "sources": ["Live Recruitment Roles"]
         }
-
-    # ======================================================
-    # SEMANTIC DOMAIN FILTER
-    # ======================================================
-    def is_recruitment_related(self, question: str) -> bool:
-
-        recruitment_profile = """
-        Orange Group recruitment policies, interview process,
-        candidate shortlisting, eligibility criteria,
-        contract staff requirements, management trainee programme,
-        sales and marketing bootcamp, secondary tests,
-        staffing policies, employment conditions,
-        non-attendance rules, recruitment scoring and thresholds.
-        """
-
-        question_vec = self.embed_model.encode(
-            [question],
-            normalize_embeddings=True
-        )[0]
-
-        profile_vec = self.embed_model.encode(
-            [recruitment_profile],
-            normalize_embeddings=True
-        )[0]
-
-        similarity = float(question_vec @ profile_vec)
-        logger.info(f"Domain similarity score: {similarity}")
-
-        return similarity >= 0.38
 
     # ======================================================
     # INGEST PDFs
@@ -196,36 +159,22 @@ class RecruitmentRAG:
             normalize_embeddings=True
         ).tolist()
 
-        semantic_results = self.collection.query(
+        results = self.collection.query(
             query_embeddings=query_vector,
             n_results=top_k,
             include=["documents", "metadatas", "distances"],
         )
 
-        documents = semantic_results["documents"][0]
-        metadatas = semantic_results["metadatas"][0]
-        distances = semantic_results["distances"][0]
+        documents = results["documents"][0]
+        metadatas = results["metadatas"][0]
+        distances = results["distances"][0]
 
-        keyword_scores = []
-        question_words = set(re.findall(r"\w+", question.lower()))
+        # If similarity too weak → treat as no context
+        if min(distances) > 0.85:
+            return "", []
 
-        for doc in documents:
-            doc_words = set(re.findall(r"\w+", doc.lower()))
-            overlap = len(question_words.intersection(doc_words))
-            keyword_scores.append(overlap)
-
-        hybrid_rank = []
-        for i in range(len(documents)):
-            semantic_score = 1 - distances[i]
-            keyword_score = keyword_scores[i] * 0.05
-            final_score = semantic_score + keyword_score
-            hybrid_rank.append((final_score, i))
-
-        hybrid_rank.sort(reverse=True)
-        best_indices = [i for _, i in hybrid_rank[:5]]
-
-        context = "\n\n".join(documents[i] for i in best_indices)
-        sources = list(set(metadatas[i]["source"] for i in best_indices))
+        context = "\n\n".join(documents)
+        sources = list(set(m["source"] for m in metadatas))
 
         return context, sources
 
@@ -239,112 +188,130 @@ class RecruitmentRAG:
 
         q_lower = question.lower().strip()
 
-        # 1️⃣ Greetings
-        greetings = ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]
-
-        if q_lower in greetings:
-            return {
-                "answer": "Hello 👋 I am Orange Group’s Recruitment Assistant. How may I assist you today?",
-                "sources": []
-            }
+        # Greetings
+        if q_lower in ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]:
+            return {"answer": "Hello 👋 I am Orange Recruitment. How may I assist you today?", "sources": []}
 
         if "how are you" in q_lower:
-            return {
-                "answer": "I'm functioning optimally and ready to assist you with Orange Group recruitment inquiries 😊",
-                "sources": []
-            }
+            return {"answer": "I'm functioning optimally and ready to assist you with recruitment inquiries.", "sources": []}
 
-        # 2️⃣ Current roles
-        role_keywords = [
-            "available roles",
-            "current roles",
-            "open positions",
-            "vacancies",
-            "job openings",
-            "are you recruiting",
-            "what roles are available"
-        ]
-
-        if any(keyword in q_lower for keyword in role_keywords):
+        # Current roles
+        if any(x in q_lower for x in ["available roles", "current roles", "vacancies", "job openings"]):
             return self.get_current_roles_response()
 
-        # 3️⃣ Domain restriction
-        if not self.is_recruitment_related(question):
+        # Memory correction
+        memory_answer = self.check_memory(question)
+        if memory_answer:
+            return {"answer": memory_answer, "sources": ["Learned Correction"]}
+
+        # Detect correction
+        if any(x in q_lower for x in ["that is wrong", "correction:", "the correct answer is"]):
+            correct_answer = question.split("is")[-1].strip()
+            self.store_correction(question, correct_answer)
+            return {"answer": "✅ Thank you. I’ve learned this correction.", "sources": []}
+
+        # Hybrid search (Domain Gate)
+        context, sources = self.hybrid_search(question)
+
+        if not context:
             return {
                 "answer": "I only answer questions that are Orange Group recruitment related.",
                 "sources": []
             }
 
-        # 4️⃣ Memory correction
-        memory_answer = self.check_memory(question)
-        if memory_answer:
-            return {
-                "answer": memory_answer,
-                "sources": ["Learned Correction"]
-            }
-
-        # 5️⃣ Detect correction
-        correction_phrases = ["that is wrong", "correction:", "the correct answer is"]
-
-        for phrase in correction_phrases:
-            if phrase in q_lower:
-                correct_answer = question.split(phrase)[-1].strip()
-                self.store_correction(question, correct_answer)
-                return {
-                    "answer": "✅ Thank you. I’ve learned this correction and will use it next time.",
-                    "sources": []
-                }
-
-        # 6️⃣ Hybrid search
-        context, sources = self.hybrid_search(question)
-
-        if not context.strip():
-            return {
-                "answer": "For further assistance, please contact recruitment@orangegroups.com",
-                "sources": []
-            }
-
-        # 7️⃣ Conversational Prompt
+        # Strict Anti-Hallucination Prompt
         prompt = f"""
-You are Orange Group’s Official Recruitment Assistant.
+You are "Orange Recruitment", a professional and compliance-restricted recruitment specialist for Orange Group.
 
-Provide a clear, professional, conversational response.
-Do not mention section numbers or document headings.
-Rewrite naturally as if explaining to a staff member.
+PRIMARY FUNCTION:
+Your sole responsibility is to provide accurate recruitment information strictly based on the provided CONTEXT extracted from official PDF documents in the knowledge base.
 
+You are NOT a general AI assistant.
+
+------------------------------------------------------------
+PURPOSE AND OBJECTIVES
+------------------------------------------------------------
+
+• Provide precise and factual answers regarding recruitment processes, eligibility criteria, job roles, staffing policies, candidate requirements, and related matters.
+• Ensure every statement made is directly supported by the provided CONTEXT.
+• Help users locate and understand recruitment-related information clearly and efficiently.
+
+------------------------------------------------------------
+MANDATORY RULES (STRICT COMPLIANCE)
+------------------------------------------------------------
+
+1. INFORMATION SOURCE RESTRICTION
+   - You MUST answer ONLY using the information explicitly stated in the CONTEXT.
+   - You MUST NOT use external knowledge.
+   - You MUST NOT infer missing details.
+   - You MUST NOT fabricate dates, times, locations, names, numbers, or policies.
+
+2. IF INFORMATION IS NOT AVAILABLE
+   - If the answer is not clearly supported by the CONTEXT, respond EXACTLY with:
+     "For further assistance, please contact recruitment@orangegroups.com"
+   - Do NOT attempt to guess or partially answer.
+
+3. CONTEXT BOUNDARY
+   - Do NOT go outside the provided CONTEXT.
+   - Do NOT provide general recruitment advice unless explicitly stated in the CONTEXT.
+   - Do NOT summarize beyond what is directly supported.
+
+4. OUTPUT STRUCTURE
+   - Do NOT mention section numbers, clause numbers, or document headings.
+   - Do NOT reference "the document states" or similar phrasing.
+   - Rewrite the answer in clear, professional language.
+   - Maintain a formal and business-like tone.
+
+5. UNCERTAINTY HANDLING
+   - If the CONTEXT is partially relevant but does not fully answer the question, you MUST refuse.
+
+------------------------------------------------------------
+PROFESSIONAL TONE
+------------------------------------------------------------
+
+• Formal
+• Objective
+• Concise
+• Business-oriented
+• Authoritative but factual
+
+------------------------------------------------------------
 CONTEXT:
 {context}
 
-QUESTION:
+------------------------------------------------------------
+USER QUESTION:
 {question}
 
+------------------------------------------------------------
 FINAL ANSWER:
 """
 
-        response_obj = self.llm.invoke(prompt)
-        response = response_obj.content.strip()
+        response = self.llm.invoke(prompt).content.strip()
 
-        # 8️⃣ Usage Tracking
+        # Numeric Hallucination Guard
+        numbers_in_response = re.findall(r"\d+", response)
+        numbers_in_context = re.findall(r"\d+", context)
+
+        for num in numbers_in_response:
+            if num not in numbers_in_context:
+                response = "For further assistance, please contact recruitment@orangegroups.com"
+                break
+
+        # Usage Tracking
         try:
-            prompt_tokens = len(prompt.split())
-            completion_tokens = len(response.split())
-            tokens_used = prompt_tokens + completion_tokens
-
-            cost = (tokens_used / 1_000_000) * 0.05
-
+            tokens = len(prompt.split()) + len(response.split())
+            cost = (tokens / 1_000_000) * 0.05
             track_usage(
                 prompt=question,
                 engine="llama-3.1-8b-instant",
-                tokens_used=tokens_used,
+                tokens_used=tokens,
                 cost=round(cost, 6)
             )
         except:
             pass
 
-        return {
-            "answer": response,
-            "sources": sources
-        }
+        return {"answer": response, "sources": sources}
 
 
 # ======================================================

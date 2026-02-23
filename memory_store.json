@@ -1,5 +1,14 @@
 {
-    "corrections": [],
+    "corrections": [
+        {
+            "question": "tell me about the test",
+            "answer": "that you will tell them that they will go to the website and do primary test if they get anything greater than 60% they will be invited for secondary test"
+        },
+        {
+            "question": "how do i apply",
+            "answer": "that you will tell them that they will go to the website recruitment@orangegroups and do primary test if they get anything greater than 60% they will be invited for secondary test"
+        }
+    ],
     "current_roles": [
         {
             "title": "Sales Executive",

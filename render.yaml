@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: orange-recruitment-ai
+    runtime: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn backend:app --host 0.0.0.0 --port 10000"
+    envVars:
+      - key: GROQ_API_KEY1
+        sync: false
+      - key: AGENT_ID
+        sync: false
+      - key: USAGE_TRACKER_KEY
+        sync: false
