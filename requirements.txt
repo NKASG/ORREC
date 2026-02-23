@@ -1,17 +1,9 @@
-langchain  
 fastapi
 uvicorn
-requests
-langchain-core
-langchain-community
-pypdf
-pymupdf
-sentence-transformers
-faiss-cpu
 chromadb
-langchain-groq 
+langchain-community
+langchain-groq
+langchain-text-splitters
 python-dotenv
-typesense
-pandas
-torch==2.2.2+cpu
---extra-index-url https://download.pytorch.org/whl/cpu
+requests
+pypdf
