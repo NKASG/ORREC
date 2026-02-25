@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Dict, Any
 
-import chromadb
+# import chromadb
 from sentence_transformers import SentenceTransformer
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -19,6 +19,23 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from usage_tracker import track_usage
+
+import pydantic.v1.fields
+
+# We manually inject the type for the failing field 
+# so Pydantic doesn't have to "infer" it.
+if not hasattr(pydantic.v1.fields.ModelField, '_type_hints_patched'):
+    original_infer = pydantic.v1.fields.ModelField.infer
+    
+    def patched_infer(*args, **kwargs):
+        if kwargs.get('name') == 'chroma_server_nofile':
+            kwargs['value'] = int(kwargs.get('value', 0))
+        return original_infer(*args, **kwargs)
+    
+    pydantic.v1.fields.ModelField.infer = patched_infer
+    pydantic.v1.fields.ModelField._type_hints_patched = True
+
+import chromadb  # Now import chromadb
 
 # ======================================================
 # LOAD ENV
