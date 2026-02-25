@@ -7,3 +7,4 @@ notebook/
 typesense.ipynb
 pdf_loader.ipynb
 document.ipynb
+data/vector_store/
