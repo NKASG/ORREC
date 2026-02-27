@@ -7,5 +7,4 @@ langchain-text-splitters
 python-dotenv
 requests
 pypdf
-pydantic>=2.10.0
-chromadb>=0.6.0
+pgvector
