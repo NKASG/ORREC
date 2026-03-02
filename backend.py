@@ -42,7 +42,7 @@ logger = logging.getLogger("OrangeRecruitment")
 # DATABASE CONFIG
 # ======================================================
 
-DATABASE_URL = "postgresql://postgres:newpassword123@127.0.0.1:5433/recruitment_db"
+DATABASE_URL = "postgresql://afeez:WbOrUsgMuEJ7BQlC0gokLE1aBUvIIPL2@dpg-d6ior49drdic73d6rq1g-a/recruitment_db_ugxc"
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
