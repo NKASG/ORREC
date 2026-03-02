@@ -6,11 +6,6 @@ import json
 from pathlib import Path
 from typing import Dict, Any
 
-from sentence_transformers import SentenceTransformer
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_groq import ChatGroq
-from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -18,17 +13,13 @@ from pydantic import BaseModel
 
 from sqlalchemy import create_engine, Column, String, Text
 from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy.exc import ProgrammingError
 
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_groq import ChatGroq
+
+from dotenv import load_dotenv
 from usage_tracker import track_usage
-
-# Try pgvector (enterprise mode)
-try:
-    from pgvector.sqlalchemy import Vector
-    PGVECTOR_AVAILABLE = True
-except:
-    PGVECTOR_AVAILABLE = False
-
 
 # ======================================================
 # LOAD ENV
@@ -39,43 +30,23 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("OrangeRecruitment")
 
 # ======================================================
-# DATABASE CONFIG
+# DATABASE CONFIG (EDIT THIS)
 # ======================================================
 
-DATABASE_URL = "postgresql://postgres:newpassword123@127.0.0.1:5433/recruitment_db"
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
 
-# ======================================================
-# VECTOR MODEL
-# ======================================================
+class DocumentVector(Base):
+    __tablename__ = "document_vectors"
 
-EMBED_DIM = 384  # all-MiniLM-L6-v2
-
-
-# ======================================================
-# TABLE DEFINITION
-# ======================================================
-
-if PGVECTOR_AVAILABLE:
-    class DocumentVector(Base):
-        __tablename__ = "document_vectors"
-
-        id = Column(String, primary_key=True)
-        content = Column(Text, nullable=False)
-        embedding = Column(Vector(EMBED_DIM))
-        source = Column(String)
-else:
-    class DocumentVector(Base):
-        __tablename__ = "document_vectors"
-
-        id = Column(String, primary_key=True)
-        content = Column(Text, nullable=False)
-        embedding = Column(Text)  # JSON fallback
-        source = Column(String)
+    id = Column(String, primary_key=True, index=True)
+    content = Column(Text, nullable=False)
+    embedding = Column(Text, nullable=False)  # stored as JSON
+    source = Column(String)
 
 
 Base.metadata.create_all(engine)
@@ -90,8 +61,7 @@ class RecruitmentRAG:
         self.data_dir = data_dir
         self.groq_api_key = os.getenv("GROQ_API_KEY1")
 
-        self.embed_model = SentenceTransformer("all-MiniLM-L6-v2")
-
+        self.embed_model = None  # Lazy loading
         self.db = SessionLocal()
 
         self.llm = ChatGroq(
@@ -100,12 +70,22 @@ class RecruitmentRAG:
             temperature=0.0
         )
 
-        self.ingest_data()
+    # ======================================================
+    # LAZY MODEL LOADER
+    # ======================================================
+    def get_embed_model(self):
+        if self.embed_model is None:
+            logger.info("Loading embedding model...")
+            from sentence_transformers import SentenceTransformer
+            self.embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+        return self.embed_model
 
     # ======================================================
-    # INGEST DATA
+    # INGEST PDFs (MANUAL)
     # ======================================================
     def ingest_data(self):
+
+        logger.info("Starting ingestion...")
 
         self.db.query(DocumentVector).delete()
         self.db.commit()
@@ -132,75 +112,64 @@ class RecruitmentRAG:
         texts = [c.page_content for c in chunks]
         metadatas = [c.metadata for c in chunks]
 
-        vectors = self.embed_model.encode(
+        vectors = self.get_embed_model().encode(
             texts,
             normalize_embeddings=True
         ).tolist()
 
         for i, text in enumerate(texts):
-
-            if PGVECTOR_AVAILABLE:
-                embedding_value = vectors[i]
-            else:
-                embedding_value = json.dumps(vectors[i])
-
             doc = DocumentVector(
                 id=str(uuid.uuid4()),
                 content=text,
-                embedding=embedding_value,
+                embedding=json.dumps(vectors[i]),
                 source=metadatas[i].get("source")
             )
-
             self.db.add(doc)
 
         self.db.commit()
 
+        logger.info("Ingestion completed.")
+
     # ======================================================
-    # HYBRID SEARCH (Enterprise Mode)
+    # HYBRID SEARCH
     # ======================================================
     def hybrid_search(self, question, top_k=5):
 
-        query_vector = self.embed_model.encode(
+        query_vector = self.get_embed_model().encode(
             [question],
             normalize_embeddings=True
         )[0]
 
-        if PGVECTOR_AVAILABLE:
-            results = (
-                self.db.query(DocumentVector)
-                .order_by(DocumentVector.embedding.cosine_distance(query_vector))
-                .limit(top_k)
-                .all()
+        documents = self.db.query(DocumentVector).all()
+
+        scored_results = []
+
+        for doc in documents:
+            stored_vector = json.loads(doc.embedding)
+
+            semantic_score = float(
+                sum(q * d for q, d in zip(query_vector, stored_vector))
             )
-        else:
-            documents = self.db.query(DocumentVector).all()
-            scored_results = []
 
-            for doc in documents:
-                stored_vector = json.loads(doc.embedding)
+            question_words = set(re.findall(r"\w+", question.lower()))
+            doc_words = set(re.findall(r"\w+", doc.content.lower()))
+            keyword_score = len(question_words.intersection(doc_words)) * 0.05
 
-                semantic_score = float(
-                    sum(q * d for q, d in zip(query_vector, stored_vector))
-                )
+            final_score = semantic_score + keyword_score
 
-                question_words = set(re.findall(r"\w+", question.lower()))
-                doc_words = set(re.findall(r"\w+", doc.content.lower()))
-                keyword_score = len(question_words.intersection(doc_words)) * 0.05
+            scored_results.append((final_score, doc))
 
-                final_score = semantic_score + keyword_score
+        scored_results.sort(reverse=True, key=lambda x: x[0])
 
-                scored_results.append((final_score, doc))
+        top_docs = [doc for _, doc in scored_results[:top_k]]
 
-            scored_results.sort(reverse=True, key=lambda x: x[0])
-            results = [doc for _, doc in scored_results[:top_k]]
-
-        context = "\n\n".join(doc.content for doc in results)
-        sources = list(set(doc.source for doc in results if doc.source))
+        context = "\n\n".join(doc.content for doc in top_docs)
+        sources = list(set(doc.source for doc in top_docs if doc.source))
 
         return context, sources
 
     # ======================================================
-    # MAIN QUERY (UNCHANGED LOGIC)
+    # MAIN QUERY
     # ======================================================
     def query(self, question: str) -> Dict[str, Any]:
 
@@ -208,6 +177,12 @@ class RecruitmentRAG:
             return {"answer": "Please enter a valid question.", "sources": []}
 
         context, sources = self.hybrid_search(question)
+
+        if not context.strip():
+            return {
+                "answer": "No relevant recruitment information found.",
+                "sources": []
+            }
 
         prompt = f"""
 You are Orange Group’s Official Recruitment Assistant.
@@ -225,6 +200,19 @@ FINAL ANSWER:
 
         response_obj = self.llm.invoke(prompt)
         response = response_obj.content.strip()
+
+        try:
+            tokens_used = len(prompt.split()) + len(response.split())
+            cost = (tokens_used / 1_000_000) * 0.05
+
+            track_usage(
+                prompt=question,
+                engine="llama-3.1-8b-instant",
+                tokens_used=tokens_used,
+                cost=round(cost, 6)
+            )
+        except:
+            pass
 
         return {
             "answer": response,
@@ -260,3 +248,10 @@ def serve_ui():
 @app.post("/query")
 def query_api(request: QueryRequest):
     return bot.query(request.question)
+
+
+# 🔥 MANUAL INGEST ENDPOINT
+@app.post("/ingest")
+def ingest():
+    bot.ingest_data()
+    return {"status": "Ingestion completed"}
