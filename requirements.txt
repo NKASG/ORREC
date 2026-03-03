@@ -1,6 +1,7 @@
 fastapi
 uvicorn
-chromadb
+psycopg2-binary
+sqlalchemy
 langchain-community
 langchain-groq
 langchain-text-splitters
