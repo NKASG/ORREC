@@ -1,220 +1,204 @@
 <!DOCTYPE html>
 <html>
 <head>
-<title>Orange AI Recruitment</title>
+
+<title>Orange Recruitment AI</title>
+
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
-body {
-    margin: 0;
-    font-family: 'Segoe UI', sans-serif;
-    display: flex;
-    height: 100vh;
-    background: #ffffff;
+
+body{
+margin:0;
+font-family:Segoe UI;
+background:#f6f6f6;
+display:flex;
+height:100vh;
 }
 
-/* Sidebar */
-.sidebar {
-    width: 220px;
-    background: #ff6a00;
-    color: white;
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-start;
+.sidebar{
+width:220px;
+background:#ff6a00;
+color:white;
+padding:20px;
 }
 
-.sidebar h2 {
-    margin-top: 0;
+.main{
+flex:1;
+display:flex;
+flex-direction:column;
 }
 
-/* Main Area */
-.main {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
+.header{
+padding:15px;
+font-weight:bold;
+border-bottom:1px solid #ddd;
+background:white;
 }
 
-.header {
-    padding: 15px;
-    border-bottom: 1px solid #eee;
-    font-weight: bold;
-    font-size: 18px;
-    background: #ffffff;
+#chat{
+flex:1;
+overflow:auto;
+padding:20px;
 }
 
-#chat-container {
-    flex: 1;
-    padding: 20px;
-    overflow-y: auto;
-    background: #f9fafb;
+.message{
+max-width:70%;
+padding:12px 16px;
+border-radius:12px;
+margin-bottom:12px;
+line-height:1.5;
 }
 
-/* Messages */
-.message {
-    max-width: 70%;
-    padding: 12px 16px;
-    margin-bottom: 12px;
-    border-radius: 14px;
-    line-height: 1.5;
-    font-size: 14px;
-    animation: fadeIn 0.2s ease-in-out;
+.user{
+background:#ff6a00;
+color:white;
+margin-left:auto;
 }
 
-.user {
-    background: #ff6a00;
-    color: white;
-    margin-left: auto;
+.bot{
+background:white;
+border:1px solid #ddd;
+box-shadow:0 2px 6px rgba(0,0,0,0.1);
 }
 
-.bot {
-    background: #ffffff;
-    border: 1px solid #ddd;
-    color: #333;
+.sources{
+font-size:12px;
+color:gray;
+margin-top:5px;
 }
 
-/* Input Area */
-.input-area {
-    display: flex;
-    padding: 15px;
-    border-top: 1px solid #eee;
-    background: white;
+.input-area{
+display:flex;
+padding:15px;
+border-top:1px solid #ddd;
+background:white;
 }
 
-input {
-    flex: 1;
-    padding: 12px;
-    border-radius: 20px;
-    border: 1px solid #ccc;
-    outline: none;
+input{
+flex:1;
+padding:12px;
+border-radius:20px;
+border:1px solid #ccc;
 }
 
-input:focus {
-    border-color: #ff6a00;
+button{
+margin-left:10px;
+padding:12px 18px;
+border:none;
+background:#ff6a00;
+color:white;
+border-radius:20px;
+cursor:pointer;
 }
 
-button {
-    margin-left: 10px;
-    padding: 12px 18px;
-    background: #ff6a00;
-    color: white;
-    border: none;
-    border-radius: 20px;
-    cursor: pointer;
-    font-weight: bold;
-}
-
-button:hover {
-    background: #e65c00;
-}
-
-.typing {
-    font-style: italic;
-    color: gray;
-    font-size: 13px;
-    margin-bottom: 10px;
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(4px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-/* Scrollbar styling */
-#chat-container::-webkit-scrollbar {
-    width: 6px;
-}
-
-#chat-container::-webkit-scrollbar-thumb {
-    background: #ff6a00;
-    border-radius: 10px;
-}
 </style>
 </head>
 
 <body>
 
 <div class="sidebar">
-    <h2>🟧 Orange AI</h2>
-    <p>Recruitment Assistant</p>
+
+<h2>🟧 Orange AI</h2>
+<p>Recruitment Assistant</p>
+
 </div>
 
 <div class="main">
 
-    <div class="header">Chat</div>
+<div class="header">Chat</div>
 
-    <div id="chat-container"></div>
+<div id="chat"></div>
 
-    <div class="input-area">
-        <input id="question" 
-               placeholder="Ask about recruitment policies, interviews, eligibility..."
-               onkeypress="if(event.key==='Enter') sendMessage()" />
-        <button onclick="sendMessage()">Send</button>
-    </div>
+<div class="input-area">
+
+<input id="question"
+placeholder="Ask about recruitment..." 
+onkeypress="if(event.key==='Enter') sendMessage()">
+
+<button onclick="sendMessage()">Send</button>
+
+</div>
 
 </div>
 
 <script>
 
-const chatContainer = document.getElementById("chat-container");
+const chat=document.getElementById("chat")
 
-function addMessage(text, sender) {
-    const div = document.createElement("div");
-    div.className = "message " + sender;
-    div.innerText = text;
-    chatContainer.appendChild(div);
-    chatContainer.scrollTop = chatContainer.scrollHeight;
+function addMessage(text,type,sources=[]){
+
+const div=document.createElement("div")
+
+div.className="message "+type
+
+function formatText(text){
+
+text = text.replace(/\*\*/g,"")        // remove **bold**
+text = text.replace(/\*/g,"• ")        // convert * to bullet
+text = text.replace(/\n/g,"<br>")      // new lines
+
+return text
 }
 
-function showTyping() {
-    const typing = document.createElement("div");
-    typing.className = "typing";
-    typing.id = "typing";
-    typing.innerText = "Assistant is typing...";
-    chatContainer.appendChild(typing);
-    chatContainer.scrollTop = chatContainer.scrollHeight;
+div.innerHTML=formatText(text)
+
+if(sources.length){
+
+const s=document.createElement("div")
+s.className="sources"
+s.innerText="Sources: "+sources.join(", ")
+
+div.appendChild(s)
+
 }
 
-function removeTyping() {
-    const typing = document.getElementById("typing");
-    if (typing) typing.remove();
+chat.appendChild(div)
+
+chat.scrollTop=chat.scrollHeight
+
 }
 
-async function sendMessage() {
-    const input = document.getElementById("question");
-    const question = input.value.trim();
-    if (!question) return;
+async function sendMessage(){
 
-    addMessage(question, "user");
-    input.value = "";
+const input=document.getElementById("question")
 
-    showTyping();
+const question=input.value.trim()
 
-    try {
-        const response = await fetch("/query", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({question})
-        });
+if(!question) return
 
-        const data = await response.json();
+addMessage(question,"user")
 
-        removeTyping();
-        addMessage(data.answer, "bot");
+input.value=""
 
-    } catch (error) {
-        removeTyping();
-        addMessage("System temporarily unavailable. Please try again.", "bot");
-    }
+const r=await fetch("/query",{
+
+method:"POST",
+
+headers:{
+"Content-Type":"application/json"
+},
+
+body:JSON.stringify({
+question
+})
+
+})
+
+const data=await r.json()
+
+addMessage(data.answer,"bot",data.sources)
+
 }
 
-window.onload = function() {
-    chatContainer.innerHTML = "";
-    addMessage(
-        "Hello 👋 I am Orange Group’s Recruitment Assistant. How may I assist you today?",
-        "bot"
-    );
-};
+window.onload=()=>{
+
+addMessage(
+"Hello 👋 I am Orange Group’s Recruitment Assistant. How may I help you today?",
+"bot"
+)
+
+}
 
 </script>
 
